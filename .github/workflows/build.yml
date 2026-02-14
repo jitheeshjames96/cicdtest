@@ -62,5 +62,7 @@ jobs:
 
       - name: Trigger Jenkins deploy
         run: |
-          curl -X POST https://jenkins-url/job/deploy/build \
-          --user user:apitoken
+          curl -X POST https://jenkins-url/job/deploy-sample-app/build \
+          --user user:{{ secrets.JENKINS_TOKEN }} \
+          --data version=$VERSION
+
