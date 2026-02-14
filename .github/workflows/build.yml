@@ -1,14 +1,17 @@
-name: Build Multi Arch App
+name: Build Multi-Arch Node App
 
 on:
   workflow_dispatch:
 
 env:
   APP_NAME: sample-app
-  S3_BUCKET: company-artifacts
+  APP_DIR: sample-app
+  S3_BUCKET: ${{ secrets.S3_BUCKET }}
 
 jobs:
+
   build:
+
     strategy:
       matrix:
         arch: [amd64, arm64]
@@ -20,18 +23,31 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      # checkout repo
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # debug folder structure (safe to keep)
+      - name: Show repo structure
+        run: ls -R
+
+      # setup node
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      # configure AWS OIDC
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Install native deps per architecture
+      # install dependencies per architecture
+      - name: Install dependencies
+        working-directory: ${{ env.APP_DIR }}
         run: |
           if [ "${{ matrix.arch }}" = "arm64" ]; then
             npm install --arch=arm64
@@ -39,30 +55,42 @@ jobs:
             npm install --arch=x64
           fi
 
-      - name: Inject build metadata
+      # create build metadata
+      - name: Generate build metadata
+        working-directory: ${{ env.APP_DIR }}
         run: |
-          echo "VERSION=$(date +%Y%m%d%H%M)" >> build-info.txt
+          VERSION=v$(date +%Y%m%d%H%M)
+          echo "VERSION=$VERSION" > build-info.txt
           echo "ARCH=${{ matrix.arch }}" >> build-info.txt
-          echo "BUILT_BY=GitHubActions" >> build-info.txt
+          echo "BUILT_BY=github-actions" >> build-info.txt
+          echo "BUILD_TIME=$(date)" >> build-info.txt
 
-      - name: Package
+      # package artifact
+      - name: Package artifact
         run: |
+          VERSION=v$(date +%Y%m%d%H%M)
+
           mkdir build-${{ matrix.arch }}
-          cp -r * build-${{ matrix.arch }}
+          cp -r $APP_DIR/* build-${{ matrix.arch }}
+
           zip -r ${{ matrix.arch }}.zip build-${{ matrix.arch }}
 
-      - name: Upload artifact
+      # upload artifacts to S3
+      - name: Upload artifact to S3
         run: |
-          VERSION=$(date +%Y%m%d%H%M)
+          VERSION=v$(date +%Y%m%d%H%M)
+
           aws s3 cp ${{ matrix.arch }}.zip \
           s3://$S3_BUCKET/$APP_NAME/$VERSION/${{ matrix.arch }}.zip
 
           aws s3 cp ${{ matrix.arch }}.zip \
           s3://$S3_BUCKET/$APP_NAME/latest/${{ matrix.arch }}.zip
 
-      - name: Trigger Jenkins deploy
+      # trigger Jenkins deployment
+      - name: Trigger Jenkins
         run: |
-          curl -X POST https://jenkins-url/job/deploy-sample-app/build \
-          --user user:{{ secrets.JENKINS_TOKEN }} \
-          --data version=$VERSION
+          VERSION=v$(date +%Y%m%d%H%M)
 
+          curl -X POST ${{ secrets.JENKINS_URL }} \
+          --user ${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_API_TOKEN }} \
+          --data version=$VERSION
