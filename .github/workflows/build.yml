@@ -1,0 +1,66 @@
+name: Build Multi Arch App
+
+on:
+  workflow_dispatch:
+
+env:
+  APP_NAME: sample-app
+  S3_BUCKET: company-artifacts
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Install native deps per architecture
+        run: |
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            npm install --arch=arm64
+          else
+            npm install --arch=x64
+          fi
+
+      - name: Inject build metadata
+        run: |
+          echo "VERSION=$(date +%Y%m%d%H%M)" >> build-info.txt
+          echo "ARCH=${{ matrix.arch }}" >> build-info.txt
+          echo "BUILT_BY=GitHubActions" >> build-info.txt
+
+      - name: Package
+        run: |
+          mkdir build-${{ matrix.arch }}
+          cp -r * build-${{ matrix.arch }}
+          zip -r ${{ matrix.arch }}.zip build-${{ matrix.arch }}
+
+      - name: Upload artifact
+        run: |
+          VERSION=$(date +%Y%m%d%H%M)
+          aws s3 cp ${{ matrix.arch }}.zip \
+          s3://$S3_BUCKET/$APP_NAME/$VERSION/${{ matrix.arch }}.zip
+
+          aws s3 cp ${{ matrix.arch }}.zip \
+          s3://$S3_BUCKET/$APP_NAME/latest/${{ matrix.arch }}.zip
+
+      - name: Trigger Jenkins deploy
+        run: |
+          curl -X POST https://jenkins-url/job/deploy/build \
+          --user user:apitoken
